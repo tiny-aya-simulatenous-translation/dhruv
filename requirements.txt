@@ -1,0 +1,12 @@
+torch>=2.0
+torchaudio>=2.0
+datasets<4.0.0
+soundfile
+pyloudnorm
+onnxruntime
+huggingface_hub
+numpy
+pandas
+matplotlib
+pyyaml
+tqdm

@@ -1,0 +1,54 @@
+# Hindi Data Prep Pipeline -- Configuration
+# All paths are relative to this file's directory.
+
+sample_rate: 24000
+loudness_lufs: -23.0
+min_duration_s: 3.0
+max_duration_s: 45.0
+trim_silence: true
+trim_db_threshold: 30
+num_workers: 8
+
+# DNSMOS quality thresholds (empirically adjust after Step 3b analysis)
+dnsmos_ovrl_threshold: 3.0
+dnsmos_bak_threshold: 2.5
+
+dnsmos:
+  onnx_dir: "models/dnsmos"
+
+paths:
+  raw_dir: "data/raw"
+  raw_manifest: "data/raw/manifest.jsonl"
+  standardized_dir: "data/standardized"
+  standardized_manifest: "data/standardized/manifest.jsonl"
+  scored_manifest: "data/scored/manifest.jsonl"
+  final_dir: "data/final"
+  final_manifest: "data/final/manifest.jsonl"
+
+datasets:
+  common_voice_hi:
+    type: huggingface
+    name: "mozilla-foundation/common_voice_16_1"
+    splits: ["train", "validation", "test"]
+    audio_column: "audio"
+    text_column: "sentence"
+
+  indicvoices_r:
+    type: huggingface
+    name: "ai4bharat/indicvoices_r"
+    splits: ["train"]
+    audio_column: "audio"
+    text_column: "transcript"
+
+  openslr_hindi:
+    type: openslr
+    resource_id: 103
+    splits: ["train"]
+
+  fleurs_hi:
+    type: huggingface
+    name: "google/fleurs"
+    language: "hi_in"
+    splits: ["train", "validation", "test"]
+    audio_column: "audio"
+    text_column: "transcription"
