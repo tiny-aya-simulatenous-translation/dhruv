@@ -1,0 +1,25 @@
+# Generated data (audio files, manifests, packaged datasets)
+data/
+
+# Downloaded ONNX models
+models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
+env/
