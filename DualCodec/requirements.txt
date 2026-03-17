@@ -1,0 +1,32 @@
+# DualCodec finetuning requirements
+# Install: pip install -r requirements.txt
+
+# Core ML
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy
+
+# HuggingFace ecosystem
+transformers>=4.30.0
+huggingface_hub[cli]
+safetensors
+datasets
+
+# Training framework
+accelerate>=1.0
+hydra-core
+omegaconf
+
+# Audio processing
+descript-audiotools>=0.7.2
+soundfile
+
+# Model / training utilities
+einops
+easydict
+cached_path
+tqdm
+psutil
+
+# Parquet reading (for HF dataset inspection)
+pyarrow
