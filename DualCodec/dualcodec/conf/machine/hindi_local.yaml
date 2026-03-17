@@ -1,0 +1,16 @@
+
+# Paths for finetuning on a local machine.
+# Override any of these from the CLI, e.g.:
+#   machine.hf_dataset_name=your-org/your-dataset
+
+w2v_path: ./w2v-bert-2.0
+ckpt_root_path: ./dualcodec_ckpts
+log_dir: ./output_checkpoints
+init_model_path: ./dualcodec_ckpts
+
+# HuggingFace dataset name (for hf_audio_static_batch data config)
+hf_dataset_name: Pranavz/hinglish-casual
+
+# JSONL manifest (for hindi_jsonl_static_batch data config)
+manifest_path: ./data/train.jsonl
+data_root: ""

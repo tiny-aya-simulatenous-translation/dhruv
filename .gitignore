@@ -2,3 +2,6 @@
 !data_prep/
 !data_prep/**
 !.gitignore
+
+!DualCodec/
+!DualCodec/**

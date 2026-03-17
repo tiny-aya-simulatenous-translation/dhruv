@@ -1,0 +1,85 @@
+
+# Data pipeline for HuggingFace audio datasets (Parquet with audio bytes).
+# Audio at any sample rate is automatically resampled to 24kHz.
+# Set machine.hf_dataset_name to your HF dataset (e.g. "Pranavz/hinglish-casual").
+
+dataloader:
+  _target_: torch.utils.data.DataLoader
+  dataset: ${..datalist}
+  batch_size: null
+  num_workers: 0
+
+gluster_opener:
+  _target_: dualcodec.dataset.processor.gluster_opener
+  _partial_: true
+  manual_dist_sampler: false
+
+# HF audio is already decoded by the dataset class, so we just filter by duration
+hf_audio_passthrough:
+  _target_: dualcodec.dataset.processor.hf_audio_passthrough
+  _partial_: true
+  max_duration: 45.0
+  min_duration: 1.0
+
+resample:
+  _target_: dualcodec.dataset.processor.resample
+  _partial_: true
+  resample_rate: ${trainer.sample_rate}
+
+batch:
+  _target_: dualcodec.dataset.processor.batch
+  _partial_: true
+  batch_type: static
+  batch_size: ${trainer.batch_size}
+  ignore_text: true
+  max_frames_in_batch: null
+
+gluster_padding:
+  _target_: dualcodec.dataset.processor.gluster_padding
+  _partial_: true
+  use_spk_embedding: false
+  return_speech: true
+  ignore_text: true
+
+# Wav2Vec2-BERT feature extraction (semantic branch input)
+w2v_feat_extractor:
+  _target_: transformers.SeamlessM4TFeatureExtractor.from_pretrained
+  _partial_: false
+  pretrained_model_name_or_path: ${machine.w2v_path}
+w2v_feature:
+  _target_: dualcodec.dataset.processor.w2v_feature
+  _partial_: true
+  feature_extractor: ${..w2v_feat_extractor}
+
+dataset:
+  _target_: dualcodec.dataset.hindi_dataset.HuggingFaceAudioDataset
+  dataset_name: ${machine.hf_dataset_name}
+  split: train
+  audio_column: audio
+  min_duration: 1.0
+  max_duration: 45.0
+
+datalist_tmp:
+  _target_: dualcodec.dataset.dataset.DataList
+  lists: ${..dataset}
+  shuffle: false
+  partition: false
+
+datalist:
+  _target_: dualcodec.dataset.dataset.prepare_gluster_dataset
+  data_list: ${..datalist_tmp}
+  data_pipeline: ${..data_pipeline}
+
+segment_speech:
+  _target_: dualcodec.dataset.processor.segment_speech
+  _partial_: true
+  segment_length: 76800  # 3.2s at 24kHz
+
+data_pipeline:
+  - ${..gluster_opener}
+  - ${..hf_audio_passthrough}
+  - ${..resample}
+  - ${..segment_speech}
+  - ${..w2v_feature}
+  - ${..batch}
+  - ${..gluster_padding}
