@@ -28,6 +28,7 @@ import torch
 import torchaudio
 import torch.nn.functional as F
 import numpy as np
+import soundfile as sf
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -140,6 +141,10 @@ def main():
     parser.add_argument("--num_quantizers", type=int, default=8)
     parser.add_argument("--output_dir", default="reconstruction_outputs")
     parser.add_argument(
+        "--benchmark", action="store_true",
+        help="Output in benchmark-ready layout: output_dir/originals/ and output_dir/codecs/dualcodec/",
+    )
+    parser.add_argument(
         "--model_config", default="dualcodec_25hz_16384_1024_12vq",
         help="Model config name under dualcodec/conf/model/",
     )
@@ -169,16 +174,33 @@ def main():
     model.eval()
 
     # --- Build the Inference engine (handles semantic feature extraction) ---
-    from dualcodec.infer.dualcodec.inference_with_semantic import Inference
+    # Build directly instead of using Inference() to avoid cached_path dependency
+    from dualcodec.infer.dualcodec.inference_with_semantic import (
+        Inference, _build_semantic_model,
+    )
 
     print(f"Loading semantic model from {w2v_path} ...")
-    engine = Inference(
-        dualcodec_model=model,
+    if not os.path.isdir(dualcodec_ckpts):
+        print(f"ERROR: {dualcodec_ckpts} not found.")
+        print("Download it with:")
+        print('  python3 -c "from huggingface_hub import snapshot_download; '
+              "snapshot_download('amphion/dualcodec', local_dir='dualcodec_ckpts')\"")
+        return
+
+    engine = object.__new__(Inference)
+    engine.semantic_cfg = _build_semantic_model(
         dualcodec_path=dualcodec_ckpts,
-        w2v_path=w2v_path,
+        semantic_model_path=w2v_path,
         device=device,
-        autocast=True,
     )
+    engine.model = model
+    engine.model.to(device)
+    engine.model.eval()
+    for key in engine.semantic_cfg:
+        if isinstance(engine.semantic_cfg[key], (torch.nn.Module, torch.Tensor)):
+            engine.semantic_cfg[key] = engine.semantic_cfg[key].to(device)
+    engine.device = device
+    engine.autocast = True
 
     # --- Load audio samples ---
     if args.hf_dataset:
@@ -192,8 +214,15 @@ def main():
         print("No samples found!")
         return
 
-    # --- Run reconstruction ---
-    os.makedirs(args.output_dir, exist_ok=True)
+    # --- Setup output directories ---
+    if args.benchmark:
+        orig_dir = os.path.join(args.output_dir, "originals")
+        recon_dir = os.path.join(args.output_dir, "codecs", "dualcodec")
+        os.makedirs(orig_dir, exist_ok=True)
+        os.makedirs(recon_dir, exist_ok=True)
+    else:
+        os.makedirs(args.output_dir, exist_ok=True)
+
     metrics = []
 
     print(f"\nReconstructing {len(samples)} samples (quantizers={args.num_quantizers}) ...\n")
@@ -204,10 +233,15 @@ def main():
         original, recon = reconstruct(engine, waveform, device, args.num_quantizers)
         snr = compute_snr(original, recon)
 
-        orig_path = os.path.join(args.output_dir, f"{name}_original.wav")
-        recon_path = os.path.join(args.output_dir, f"{name}_reconstructed.wav")
-        torchaudio.save(orig_path, original, 24000)
-        torchaudio.save(recon_path, recon, 24000)
+        wav_name = f"{name}.wav"
+        if args.benchmark:
+            orig_path = os.path.join(orig_dir, wav_name)
+            recon_path = os.path.join(recon_dir, wav_name)
+        else:
+            orig_path = os.path.join(args.output_dir, f"{name}_original.wav")
+            recon_path = os.path.join(args.output_dir, f"{name}_reconstructed.wav")
+        sf.write(orig_path, original.numpy().T, 24000)
+        sf.write(recon_path, recon.numpy().T, 24000)
 
         duration = original.shape[-1] / 24000
         metrics.append({"name": name, "snr_db": round(snr, 2), "duration_s": round(duration, 2)})
