@@ -23,6 +23,15 @@ cd "$(dirname "$0")/.."   # cd to DualCodec repo root
 
 HF_DATASET="${1:?Usage: bash scripts/train_hindi.sh <hf_dataset_name>}"
 
+# Strip full HuggingFace URL to just org/dataset if user passed a URL
+HF_DATASET="${HF_DATASET#https://huggingface.co/datasets/}"
+
+# ──────────────────────────────────────────────
+# 0. Make sure Python can find the dualcodec package
+# ──────────────────────────────────────────────
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+export HYDRA_FULL_ERROR=1
+
 # ──────────────────────────────────────────────
 # 1. Download pretrained models (idempotent)
 # ──────────────────────────────────────────────
@@ -64,7 +73,7 @@ echo ""
 #   data=hindi_jsonl_static_batch
 #   machine.manifest_path=/path/to/train.jsonl
 
-accelerate launch --num_processes 1 train.py \
+python -m accelerate.commands.launch --num_processes 1 train.py \
     --config-name=dualcodec_ft_hindi \
     machine.hf_dataset_name="${HF_DATASET}" \
     trainer.batch_size=6 \

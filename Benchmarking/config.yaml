@@ -1,0 +1,35 @@
+# ============================================================
+# Codec Benchmarking Configuration
+# ============================================================
+#
+# Directory layout expected under data_root:
+#   {language}/originals/       — original wav files
+#   {language}/transcripts.jsonl — one JSON per line: {"file": "001.wav", "text": "..."}
+#   {language}/codecs/{codec}/  — reconstructed wavs (same filenames as originals)
+
+data_root: ./data
+
+languages:
+  - hindi
+  - turkish
+
+codecs:
+  - mimi
+  - dualcodec
+  - kanade
+  - bicodec
+
+# --- DNSMOS ---
+dnsmos_model_dir: models/dnsmos   # ONNX model auto-downloaded here
+
+# --- WER (Whisper ASR) ---
+# Options: tiny, base, small, medium, large-v3
+# large-v3 recommended for Hindi/Turkish accuracy; use "medium" for faster runs
+whisper_model: large-v3
+
+# --- TTFAT ---
+ttfat_num_samples: 5   # audio files to use for latency measurement
+ttfat_num_runs: 5      # timed runs per file (after warmup)
+
+# --- Output ---
+output_dir: benchmark_results

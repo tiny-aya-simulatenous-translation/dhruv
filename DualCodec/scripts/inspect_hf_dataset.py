@@ -3,13 +3,13 @@ import sys
 from huggingface_hub import hf_hub_download
 import pyarrow.parquet as pq
 
-ds_name = sys.argv[1] if len(sys.argv) > 1 else "Pranavz/hinglish-casual"
+ds_name = sys.argv[1] if len(sys.argv) > 1 else "tiny-aya-translate/hinglish-casual"
 print(f"Downloading first shard metadata from: {ds_name} ...")
 
 # Download just the first parquet shard
 local_path = hf_hub_download(
     repo_id=ds_name,
-    filename="data/train-00000-of-00128.parquet",
+    filename="data/train-00000-of-00016.parquet",
     repo_type="dataset",
 )
 

@@ -1,0 +1,8 @@
+numpy
+soundfile
+torchaudio
+torch
+onnxruntime
+openai-whisper
+pyyaml
+tqdm

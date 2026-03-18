@@ -22,7 +22,10 @@ import string
 import time
 import transformers
 
-torchaudio.set_audio_backend("soundfile")
+try:
+    torchaudio.set_audio_backend("soundfile")
+except AttributeError:
+    pass
 AUDIO_FORMAT_SETS = set(["flac", "mp3", "m4a", "ogg", "opus", "wav", "wma"])
 
 

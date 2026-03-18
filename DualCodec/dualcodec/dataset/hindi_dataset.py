@@ -51,9 +51,30 @@ class HuggingFaceAudioDataset(IterableDataset):
 
     def _decode_audio(self, audio_entry):
         """Decode audio bytes from the HF audio struct into a waveform tensor."""
+        import soundfile as sf
+
         audio_bytes = audio_entry["bytes"]
         buf = io.BytesIO(audio_bytes)
-        waveform, sr = torchaudio.load(buf)
+
+        try:
+            # soundfile handles WAV, FLAC, OGG natively — no FFmpeg needed
+            data, sr = sf.read(buf)
+            waveform = torch.from_numpy(data).float()
+            if waveform.dim() == 1:
+                waveform = waveform.unsqueeze(0)
+            else:
+                waveform = waveform.T
+        except Exception:
+            # fallback for formats soundfile can't handle (e.g. MP3):
+            # write to temp file and let torchaudio try all its backends
+            import tempfile
+            path = audio_entry.get("path", "")
+            ext = os.path.splitext(path)[1].lower() if path else ".wav"
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as tmp:
+                tmp.write(audio_bytes)
+                tmp.flush()
+                waveform, sr = torchaudio.load(tmp.name)
+
         if waveform.shape[0] > 1:
             waveform = waveform.mean(dim=0, keepdim=True)
         return waveform, sr
@@ -92,14 +113,22 @@ class HuggingFaceAudioDataset(IterableDataset):
             row_indices = list(range(table.num_rows))
             random.shuffle(row_indices)
 
+            has_duration_col = "duration" in table.column_names
+
             for row_idx in row_indices:
                 try:
+                    if has_duration_col:
+                        dur = table.column("duration")[row_idx].as_py()
+                        if dur < self.min_duration or dur > self.max_duration:
+                            continue
+
                     audio_entry = table.column(self.audio_column)[row_idx].as_py()
                     waveform, sr = self._decode_audio(audio_entry)
 
                     duration = waveform.shape[-1] / sr
-                    if duration < self.min_duration or duration > self.max_duration:
-                        continue
+                    if not has_duration_col:
+                        if duration < self.min_duration or duration > self.max_duration:
+                            continue
 
                     yield {
                         "wav": audio_entry.get("path", ""),
