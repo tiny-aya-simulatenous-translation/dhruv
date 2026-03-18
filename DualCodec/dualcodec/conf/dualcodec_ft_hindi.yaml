@@ -11,7 +11,7 @@ hydra:
 trainer:
   exp_name: dualcodec_ft_hindi_25hz
   max_tokens: 2000
-  batch_size: 32
+  batch_size: 12
   args:
     resume: true
     reset_steps: true
@@ -27,16 +27,16 @@ trainer:
     lambda_distill_loss: 15.0
     add_semantic_spec_loss: true
     train:
-      max_steps: 25000
+      max_steps: 40000
       save_checkpoint_stride:
         - 5000
       keep_last: [3]
       disable_mixed_precision: true
       optimizer:
-        lr: 1e-4
+        lr: 2e-4
       adamw:
-        lr: 1e-4
+        lr: 2e-4
       scheduler:
-        warmup_steps: 1000
-        total_steps: 25000
-        min_lr: 1e-5
+        warmup_steps: 1500
+        total_steps: 40000
+        min_lr: 5e-5
