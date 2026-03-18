@@ -11,7 +11,7 @@ hydra:
 trainer:
   exp_name: dualcodec_ft_hindi_25hz
   max_tokens: 2000
-  batch_size: 8
+  batch_size: 32
   args:
     resume: true
     reset_steps: true

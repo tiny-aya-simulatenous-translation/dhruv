@@ -1,5 +1,5 @@
 
-w2v_path: ./w2v-bert-2.0
-ckpt_root_path: ./dualcodec_ckpts
-log_dir: ./output_checkpoints
-init_model_path: ./dualcodec_ckpts
+w2v_path: facebook/w2v-bert-2.0
+ckpt_root_path: ${hydra:runtime.cwd}/dualcodec_ckpts
+log_dir: ${hydra:runtime.cwd}/output_checkpoints
+init_model_path: ${hydra:runtime.cwd}/dualcodec_ckpts

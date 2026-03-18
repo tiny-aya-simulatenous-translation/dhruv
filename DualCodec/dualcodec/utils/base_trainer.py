@@ -515,8 +515,8 @@ class BaseTrainer(object):
                         except Exception as e:
                             print(e)
                             self.logger.info("Failed to save checkpoint, resuming...")
-                    # if self.step == self.max_steps:
-                    #     exit(0)
+                    if self.step == self.max_steps:
+                        exit(0)
                 if self.accelerator.is_main_process:
                     if self.step % 200 == 0:
                         self.logger.info(f"Running Avg Loss: {ema_loss:.5f}")

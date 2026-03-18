@@ -9,7 +9,7 @@ log_dir: ./output_checkpoints
 init_model_path: ./dualcodec_ckpts
 
 # HuggingFace dataset name (for hf_audio_static_batch data config)
-hf_dataset_name: Pranavz/hinglish-casual
+hf_dataset_name: tiny-aya-translate/hinglish-casual
 
 # JSONL manifest (for hindi_jsonl_static_batch data config)
 manifest_path: ./data/train.jsonl

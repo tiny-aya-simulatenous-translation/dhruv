@@ -73,8 +73,8 @@ echo ""
 #   data=hindi_jsonl_static_batch
 #   machine.manifest_path=/path/to/train.jsonl
 
-python -m accelerate.commands.launch --num_processes 1 train.py \
+python3 -m accelerate.commands.launch --num_processes 1 train.py \
     --config-name=dualcodec_ft_hindi \
     machine.hf_dataset_name="${HF_DATASET}" \
-    trainer.batch_size=6 \
+    trainer.batch_size=16 \
     data.segment_speech.segment_length=76800
