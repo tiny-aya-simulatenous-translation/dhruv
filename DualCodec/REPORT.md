@@ -224,29 +224,48 @@ Results saved to:
 
 ## 5. Results
 
-### 5.1 DualCodec Finetuned (55k steps) — Hindi
+### 5.1 Reconstruction SNR (from `reconstruct.py`)
 
-| Metric | Value |
-|---|---|
-| **DNSMOS OVRL** | 3.91 ± 0.18 |
-| **SSNR** | 8.43 ± 1.01 dB |
-| **WER** | (pending — requires ffmpeg + Whisper) |
-
-### 5.2 DualCodec Base Pretrained — Hindi
-
-| Metric | Value |
-|---|---|
-| **DNSMOS OVRL** | (pending) |
-| **SSNR** | (pending) |
-| **WER** | (pending) |
-
-### 5.3 Comparison (to be filled after running --also_base)
-
-| | Finetuned | Base | Delta |
+| Model | Avg SNR (dB) | Samples | Dataset |
 |---|---|---|---|
+| **DualCodec Finetuned** (55k steps) | **10.24** | 50 | `tiny-aya-translate/hinglish-casual` |
+| **DualCodec Base Pretrained** | (pending) | 50 | `tiny-aya-translate/hinglish-casual` |
+
+### 5.2 Benchmark Metrics (from `benchmark.py`)
+
+#### DualCodec Finetuned (55k steps) — Hindi
+
+| Metric | Mean | Std |
+|---|---|---|
+| **DNSMOS OVRL** | 3.91 | ± 0.18 |
+| **SSNR** | 8.43 | ± 1.01 dB |
+| **WER** | (pending) | — |
+
+#### DualCodec Base Pretrained — Hindi
+
+| Metric | Mean | Std |
+|---|---|---|
+| **DNSMOS OVRL** | (pending) | — |
+| **SSNR** | (pending) | — |
+| **WER** | (pending) | — |
+
+### 5.3 Finetuned vs Base Comparison
+
+| Metric | Finetuned | Base | Delta |
+|---|---|---|---|
+| Reconstruction SNR (dB) | 10.24 | — | — |
 | DNSMOS OVRL | 3.91 | — | — |
 | SSNR (dB) | 8.43 | — | — |
 | WER | — | — | — |
+
+### 5.4 Notes
+
+- **50 samples** from `tiny-aya-translate/hinglish-casual`, duration 1–30s, resampled to 24kHz
+- **8 quantizers** used (1 semantic + 7 acoustic RVQ layers)
+- DNSMOS scored on reconstructed audio only (scale 1–5, higher is better)
+- SSNR computed over 25ms voiced frames with 10ms hop (higher is better)
+- WER pending installation of `ffmpeg` + Whisper `large-v3` on server
+- Base model comparison pending download of `amphion/dualcodec` pretrained weights
 
 ---
 
