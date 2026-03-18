@@ -6,17 +6,24 @@ Encodes audio through the codec and decodes back, saving both original
 and reconstructed waveforms for qualitative comparison.
 
 Usage:
+    # Finetuned model only:
     python scripts/reconstruct.py \
-        --checkpoint output_checkpoints/dualcodec_ft_hindi_25hz/checkpoint/epoch-0009_step-0055000_loss-0.000000-dualcodec_ft_hindi_25hz \
-        --hf_dataset Pranavz/hinglish-casual \
-        --num_samples 10 \
-        --output_dir reconstruction_outputs
+        --checkpoint output_checkpoints/.../epoch-0009_step-0055000_... \
+        --hf_dataset tiny-aya-translate/hinglish-casual \
+        --num_samples 50 --benchmark \
+        --output_dir ../Benchmarking/data/hindi
 
-    # Or with local wav files:
+    # Finetuned + base pretrained model (for comparison):
     python scripts/reconstruct.py \
-        --checkpoint output_checkpoints/dualcodec_ft_hindi_25hz/checkpoint/epoch-0009_step-0055000_loss-0.000000-dualcodec_ft_hindi_25hz \
-        --audio_dir /path/to/wavs \
-        --num_samples 10
+        --checkpoint output_checkpoints/.../epoch-0009_step-0055000_... \
+        --hf_dataset tiny-aya-translate/hinglish-casual \
+        --num_samples 50 --benchmark --also_base \
+        --output_dir ../Benchmarking/data/hindi
+
+    # Local wav files:
+    python scripts/reconstruct.py \
+        --checkpoint output_checkpoints/.../epoch-0009_step-0055000_... \
+        --audio_dir /path/to/wavs --num_samples 10
 """
 
 import argparse
@@ -61,27 +68,66 @@ def load_checkpoint(model, checkpoint_path):
 
 
 def load_samples_from_hf(dataset_name, num_samples, min_duration=1.0, max_duration=30.0):
-    """Pull audio samples from a HuggingFace dataset."""
-    from dualcodec.dataset.hindi_dataset import HuggingFaceAudioDataset
+    """Pull audio samples from a HuggingFace dataset, including transcripts."""
+    import io
+    from huggingface_hub import HfApi, hf_hub_download
+    import pyarrow.parquet as pq
 
-    ds = HuggingFaceAudioDataset(
-        dataset_name=dataset_name,
-        split="train",
-        min_duration=min_duration,
-        max_duration=max_duration,
-    )
+    api = HfApi()
+    repo_files = api.list_repo_files(dataset_name, repo_type="dataset")
+    parquet_files = sorted(f for f in repo_files if f.endswith(".parquet"))
+
+    print(f"[load_samples_from_hf] Found {len(parquet_files)} parquet shards")
+
     samples = []
-    for i, sample in enumerate(ds):
-        if i >= num_samples:
+    for fname in parquet_files:
+        if len(samples) >= num_samples:
             break
-        waveform = sample["speech"]
-        sr = sample["sample_rate"]
-        if sr != 24000:
-            waveform = torchaudio.functional.resample(waveform, sr, 24000)
-        samples.append({
-            "waveform": waveform,
-            "name": f"sample_{i:04d}",
-        })
+        local_path = hf_hub_download(
+            repo_id=dataset_name, filename=fname, repo_type="dataset",
+        )
+        table = pq.read_table(local_path)
+        text_col = next(
+            (c for c in ["text", "transcript", "utterance"] if c in table.column_names),
+            None,
+        )
+
+        for row_idx in range(table.num_rows):
+            if len(samples) >= num_samples:
+                break
+            try:
+                audio_entry = table.column("audio")[row_idx].as_py()
+                audio_bytes = audio_entry["bytes"]
+                data, sr = sf.read(io.BytesIO(audio_bytes))
+                waveform = torch.from_numpy(data).float()
+                if waveform.dim() == 1:
+                    waveform = waveform.unsqueeze(0)
+                else:
+                    waveform = waveform.T
+                if waveform.shape[0] > 1:
+                    waveform = waveform.mean(dim=0, keepdim=True)
+
+                duration = waveform.shape[-1] / sr
+                if duration < min_duration or duration > max_duration:
+                    continue
+
+                if sr != 24000:
+                    waveform = torchaudio.functional.resample(waveform, sr, 24000)
+
+                sample = {
+                    "waveform": waveform,
+                    "name": f"sample_{len(samples):04d}",
+                }
+                if text_col:
+                    sample["text"] = table.column(text_col)[row_idx].as_py()
+
+                samples.append(sample)
+            except Exception as e:
+                print(f"  Skipping row {row_idx}: {e}")
+                continue
+
+    print(f"[load_samples_from_hf] Loaded {len(samples)} samples"
+          f" ({'with' if samples and 'text' in samples[0] else 'without'} transcripts)")
     return samples
 
 
@@ -143,6 +189,10 @@ def main():
     parser.add_argument(
         "--benchmark", action="store_true",
         help="Output in benchmark-ready layout: output_dir/originals/ and output_dir/codecs/dualcodec/",
+    )
+    parser.add_argument(
+        "--also_base", action="store_true",
+        help="Also reconstruct with the pretrained base model (from dualcodec_ckpts/) for comparison",
     )
     parser.add_argument(
         "--model_config", default="dualcodec_25hz_16384_1024_12vq",
@@ -214,46 +264,98 @@ def main():
         print("No samples found!")
         return
 
-    # --- Setup output directories ---
-    if args.benchmark:
-        orig_dir = os.path.join(args.output_dir, "originals")
-        recon_dir = os.path.join(args.output_dir, "codecs", "dualcodec")
-        os.makedirs(orig_dir, exist_ok=True)
-        os.makedirs(recon_dir, exist_ok=True)
-    else:
-        os.makedirs(args.output_dir, exist_ok=True)
-
-    metrics = []
-
-    print(f"\nReconstructing {len(samples)} samples (quantizers={args.num_quantizers}) ...\n")
-    for sample in samples:
-        name = sample["name"]
-        waveform = sample["waveform"]  # (1, T)
-
-        original, recon = reconstruct(engine, waveform, device, args.num_quantizers)
-        snr = compute_snr(original, recon)
-
-        wav_name = f"{name}.wav"
+    # --- Run reconstruction for a given engine, save outputs ---
+    def run_reconstruction(eng, samples, codec_name, save_originals=True):
         if args.benchmark:
-            orig_path = os.path.join(orig_dir, wav_name)
-            recon_path = os.path.join(recon_dir, wav_name)
+            orig_dir = os.path.join(args.output_dir, "originals")
+            recon_dir = os.path.join(args.output_dir, "codecs", codec_name)
+            os.makedirs(orig_dir, exist_ok=True)
+            os.makedirs(recon_dir, exist_ok=True)
         else:
-            orig_path = os.path.join(args.output_dir, f"{name}_original.wav")
-            recon_path = os.path.join(args.output_dir, f"{name}_reconstructed.wav")
-        sf.write(orig_path, original.numpy().T, 24000)
-        sf.write(recon_path, recon.numpy().T, 24000)
+            os.makedirs(args.output_dir, exist_ok=True)
 
-        duration = original.shape[-1] / 24000
-        metrics.append({"name": name, "snr_db": round(snr, 2), "duration_s": round(duration, 2)})
-        print(f"  {name}: SNR = {snr:.2f} dB  ({duration:.1f}s)")
+        metrics = []
+        print(f"\nReconstructing {len(samples)} samples [{codec_name}] (quantizers={args.num_quantizers}) ...\n")
 
-    avg_snr = np.mean([m["snr_db"] for m in metrics])
-    print(f"\nAverage SNR: {avg_snr:.2f} dB")
-    print(f"Outputs saved to {args.output_dir}/")
+        for sample in samples:
+            name = sample["name"]
+            waveform = sample["waveform"]
 
-    summary = {"avg_snr_db": round(avg_snr, 2), "num_samples": len(metrics), "samples": metrics}
-    with open(os.path.join(args.output_dir, "metrics.json"), "w") as f:
-        json.dump(summary, f, indent=2)
+            original, recon = reconstruct(eng, waveform, device, args.num_quantizers)
+            snr = compute_snr(original, recon)
+
+            wav_name = f"{name}.wav"
+            if args.benchmark:
+                if save_originals:
+                    sf.write(os.path.join(orig_dir, wav_name), original.numpy().T, 24000)
+                sf.write(os.path.join(recon_dir, wav_name), recon.numpy().T, 24000)
+            else:
+                sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_original.wav"), original.numpy().T, 24000)
+                sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_recon.wav"), recon.numpy().T, 24000)
+
+            duration = original.shape[-1] / 24000
+            metrics.append({"name": name, "snr_db": round(snr, 2), "duration_s": round(duration, 2)})
+            print(f"  {name}: SNR = {snr:.2f} dB  ({duration:.1f}s)")
+
+        avg_snr = np.mean([m["snr_db"] for m in metrics])
+        print(f"\n[{codec_name}] Average SNR: {avg_snr:.2f} dB")
+
+        summary = {"codec": codec_name, "avg_snr_db": round(avg_snr, 2), "num_samples": len(metrics), "samples": metrics}
+        metrics_fname = f"metrics_{codec_name}.json" if args.benchmark else "metrics.json"
+        with open(os.path.join(args.output_dir, metrics_fname), "w") as f:
+            json.dump(summary, f, indent=2)
+
+        return avg_snr
+
+    # --- Finetuned model ---
+    ft_snr = run_reconstruction(engine, samples, codec_name="dualcodec", save_originals=True)
+
+    # --- Base pretrained model (optional) ---
+    if args.also_base:
+        import safetensors.torch
+
+        base_weights = os.path.join(dualcodec_ckpts, "dualcodec_25hz_16384_1024.safetensors")
+        if not os.path.isfile(base_weights):
+            print(f"\nWARNING: Base model weights not found at {base_weights}")
+            print("Download full dualcodec_ckpts with:")
+            print('  python3 -c "from huggingface_hub import snapshot_download; '
+                  "snapshot_download('amphion/dualcodec', local_dir='dualcodec_ckpts')\"")
+        else:
+            print(f"\nLoading base pretrained model from {base_weights} ...")
+            base_model = build_model(args.model_config)
+            safetensors.torch.load_model(base_model, base_weights, strict=False)
+            base_model.eval()
+
+            base_engine = object.__new__(Inference)
+            base_engine.semantic_cfg = engine.semantic_cfg  # reuse same w2v-bert
+            base_engine.model = base_model
+            base_engine.model.to(device)
+            base_engine.model.eval()
+            base_engine.device = device
+            base_engine.autocast = True
+
+            base_snr = run_reconstruction(base_engine, samples, codec_name="dualcodec_base", save_originals=False)
+
+            print(f"\n{'='*50}")
+            print(f"  COMPARISON")
+            print(f"  Finetuned:  {ft_snr:.2f} dB avg SNR")
+            print(f"  Base:       {base_snr:.2f} dB avg SNR")
+            print(f"  Delta:      {ft_snr - base_snr:+.2f} dB")
+            print(f"{'='*50}")
+
+    # Save transcripts.jsonl for benchmark WER evaluation
+    has_transcripts = any("text" in s and s["text"] for s in samples)
+    if args.benchmark and has_transcripts:
+        transcript_path = os.path.join(args.output_dir, "transcripts.jsonl")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            for sample in samples:
+                text = sample.get("text", "")
+                if text:
+                    entry = {"file": f"{sample['name']}.wav", "text": text}
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        print(f"Transcripts saved to {transcript_path}")
+
+    print(f"\nOutputs saved to {args.output_dir}/")
 
 
 if __name__ == "__main__":

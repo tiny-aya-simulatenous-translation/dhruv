@@ -22,6 +22,9 @@ omegaconf
 # Audio processing
 descript-audiotools>=0.7.2
 soundfile
+onnxruntime 
+openai-whisper
+ffmpeg
 
 # Model / training utilities
 einops
