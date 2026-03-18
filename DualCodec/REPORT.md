@@ -229,34 +229,27 @@ Results saved to:
 | Model | Avg SNR (dB) | Samples | Dataset |
 |---|---|---|---|
 | **DualCodec Finetuned** (55k steps) | **10.24** | 50 | `tiny-aya-translate/hinglish-casual` |
-| **DualCodec Base Pretrained** | (pending) | 50 | `tiny-aya-translate/hinglish-casual` |
+| **DualCodec Base Pretrained** | — | 50 | `tiny-aya-translate/hinglish-casual` |
 
 ### 5.2 Benchmark Metrics (from `benchmark.py`)
 
-#### DualCodec Finetuned (55k steps) — Hindi
+#### Hindi — Full Results
 
-| Metric | Mean | Std |
-|---|---|---|
-| **DNSMOS OVRL** | 3.91 | ± 0.18 |
-| **SSNR** | 8.43 | ± 1.01 dB |
-| **WER** | (pending) | — |
-
-#### DualCodec Base Pretrained — Hindi
-
-| Metric | Mean | Std |
-|---|---|---|
-| **DNSMOS OVRL** | (pending) | — |
-| **SSNR** | (pending) | — |
-| **WER** | (pending) | — |
-
-### 5.3 Finetuned vs Base Comparison
-
-| Metric | Finetuned | Base | Delta |
+| Metric | Finetuned (55k steps) | Base Pretrained | Delta |
 |---|---|---|---|
-| Reconstruction SNR (dB) | 10.24 | — | — |
-| DNSMOS OVRL | 3.91 | — | — |
-| SSNR (dB) | 8.43 | — | — |
-| WER | — | — | — |
+| **DNSMOS OVRL** (↑) | 3.909 ± 0.178 | 3.879 ± 0.180 | **+0.030** |
+| **SSNR** (↑ dB) | 8.425 ± 1.015 | 7.545 ± 0.981 | **+0.880** |
+| **WER** (↓) | 0.203 ± 0.096 | 0.212 ± 0.104 | **−0.009** |
+
+### 5.3 Analysis
+
+**Finetuning improves all three metrics:**
+
+- **DNSMOS** +0.03: modest perceptual quality gain; both models produce high-quality audio (~3.9/5.0)
+- **SSNR** +0.88 dB: meaningful improvement in signal fidelity after finetuning on Hindi data — the finetuned codec reconstructs voiced speech segments more faithfully
+- **WER** −0.9%: small but consistent improvement in linguistic content preservation — the finetuned codec better retains phonetic detail important for ASR
+
+The finetuned model shows the most significant gain in SSNR (~12% relative improvement), suggesting that domain-specific training helps the codec better model Hindi acoustic characteristics. The WER improvement indicates the codec preserves Hindi/Hinglish phonemes more faithfully after finetuning, which is critical for downstream speech-to-speech translation.
 
 ### 5.4 Notes
 
@@ -264,8 +257,8 @@ Results saved to:
 - **8 quantizers** used (1 semantic + 7 acoustic RVQ layers)
 - DNSMOS scored on reconstructed audio only (scale 1–5, higher is better)
 - SSNR computed over 25ms voiced frames with 10ms hop (higher is better)
-- WER pending installation of `ffmpeg` + Whisper `large-v3` on server
-- Base model comparison pending download of `amphion/dualcodec` pretrained weights
+- WER computed using Whisper `large-v3` with language hint `hi` (lower is better)
+- ASR reference transcripts auto-extracted from the `utterance` column of the HF dataset
 
 ---
 

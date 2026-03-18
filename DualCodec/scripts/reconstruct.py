@@ -44,10 +44,12 @@ def build_model(model_config="dualcodec_25hz_16384_1024_12vq"):
     """Instantiate DualCodec from its hydra config (no weights loaded)."""
     import hydra
     from hydra import initialize_config_dir
+    from hydra.core.global_hydra import GlobalHydra
 
     conf_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "dualcodec", "conf", "model")
     )
+    GlobalHydra.instance().clear()
     with initialize_config_dir(version_base="1.3", config_dir=conf_dir):
         cfg = hydra.compose(config_name=f"{model_config}.yaml", overrides=[])
         model = hydra.utils.instantiate(cfg.model)

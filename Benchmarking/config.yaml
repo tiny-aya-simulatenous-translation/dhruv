@@ -18,6 +18,7 @@ codecs:
   - dualcodec
   - kanade
   - bicodec
+  - dualcodec_base
 
 # --- DNSMOS ---
 dnsmos_model_dir: models/dnsmos   # ONNX model auto-downloaded here
