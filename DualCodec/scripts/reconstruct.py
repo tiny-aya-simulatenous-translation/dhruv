@@ -171,26 +171,36 @@ def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duratio
             if audio is None:
                 continue
 
-            # HF Audio feature returns {"array": np.array, "sampling_rate": int}
+            # Decode audio into (waveform, sample_rate) regardless of format
             if isinstance(audio, dict) and "array" in audio:
-                arr = audio["array"]
+                # datasets < 4.x: already decoded to {"array": np.ndarray, "sampling_rate": int}
+                waveform = torch.from_numpy(audio["array"]).float()
                 sr = audio["sampling_rate"]
+            elif hasattr(audio, "get_all_samples"):
+                # datasets >= 4.x: lazy AudioDecoder → torchcodec AudioSamples
+                decoded = audio.get_all_samples()
+                waveform = decoded.data.float()
+                sr = decoded.sample_rate
+            elif hasattr(audio, "numpy"):
+                waveform = torch.from_numpy(audio.numpy()).float()
+                sr = getattr(audio, "sampling_rate", 16000)
             else:
-                # audio_filepath or path column — it's a string path, skip
-                # (datasets library should have resolved it if it's an Audio feature)
-                print(f"  Skipping: audio column is not decoded (got {type(audio)})")
+                print(f"  Skipping: unsupported audio type (got {type(audio)})")
                 continue
-            waveform = torch.from_numpy(arr).float()
+
+            # Normalize to (1, T) mono
             if waveform.dim() == 1:
                 waveform = waveform.unsqueeze(0)
             if waveform.shape[0] > 1:
                 waveform = waveform.mean(dim=0, keepdim=True)
+
             duration = waveform.shape[-1] / sr
             if duration < min_duration or duration > max_duration:
                 continue
             if sr != 24000:
                 waveform = torchaudio.functional.resample(waveform, sr, 24000)
 
+            # Find text column on first iteration
             if text_col is None:
                 text_col = next(
                     (c for c in ["text", "transcript", "utterance", "normalized", "verbatim"]
