@@ -11,15 +11,18 @@ _whisper_model = None
 _whisper_model_name = None
 
 
-def _get_whisper(model_name: str = "large-v3"):
+def _get_whisper(model_name: str = "large-v3", device: str = None):
     """Lazy-load the Whisper model (cached across calls)."""
     global _whisper_model, _whisper_model_name
     if _whisper_model is not None and _whisper_model_name == model_name:
         return _whisper_model
 
+    import torch
     import whisper
-    print(f"Loading Whisper model: {model_name} ...")
-    _whisper_model = whisper.load_model(model_name)
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Loading Whisper model: {model_name} on {device} ...")
+    _whisper_model = whisper.load_model(model_name, device=device)
     _whisper_model_name = model_name
     return _whisper_model
 

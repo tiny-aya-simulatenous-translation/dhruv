@@ -69,8 +69,8 @@ def load_checkpoint(model, checkpoint_path):
     return model
 
 
-def load_samples_from_hf(dataset_name, num_samples, min_duration=1.0, max_duration=30.0):
-    """Pull audio samples from a HuggingFace dataset, including transcripts."""
+def _load_from_parquet(dataset_name, num_samples, min_duration, max_duration):
+    """Fast path: read audio bytes directly from parquet (works when audio is embedded)."""
     import io
     from huggingface_hub import HfApi, hf_hub_download
     import pyarrow.parquet as pq
@@ -79,21 +79,29 @@ def load_samples_from_hf(dataset_name, num_samples, min_duration=1.0, max_durati
     repo_files = api.list_repo_files(dataset_name, repo_type="dataset")
     parquet_files = sorted(f for f in repo_files if f.endswith(".parquet"))
 
-    print(f"[load_samples_from_hf] Found {len(parquet_files)} parquet shards")
+    if not parquet_files:
+        return None
 
+    # Check if the first shard has an "audio" column with embedded bytes
+    first_local = hf_hub_download(repo_id=dataset_name, filename=parquet_files[0], repo_type="dataset")
+    first_table = pq.read_table(first_local)
+    if "audio" not in first_table.column_names:
+        return None
+    first_audio = first_table.column("audio")[0].as_py()
+    if not isinstance(first_audio, dict) or "bytes" not in first_audio or first_audio["bytes"] is None:
+        return None
+
+    print(f"[load_from_parquet] Found {len(parquet_files)} shards with embedded audio")
     samples = []
     for fname in parquet_files:
         if len(samples) >= num_samples:
             break
-        local_path = hf_hub_download(
-            repo_id=dataset_name, filename=fname, repo_type="dataset",
-        )
+        local_path = hf_hub_download(repo_id=dataset_name, filename=fname, repo_type="dataset")
         table = pq.read_table(local_path)
         text_col = next(
             (c for c in ["text", "transcript", "utterance"] if c in table.column_names),
             None,
         )
-
         for row_idx in range(table.num_rows):
             if len(samples) >= num_samples:
                 break
@@ -108,25 +116,88 @@ def load_samples_from_hf(dataset_name, num_samples, min_duration=1.0, max_durati
                     waveform = waveform.T
                 if waveform.shape[0] > 1:
                     waveform = waveform.mean(dim=0, keepdim=True)
-
                 duration = waveform.shape[-1] / sr
                 if duration < min_duration or duration > max_duration:
                     continue
-
                 if sr != 24000:
                     waveform = torchaudio.functional.resample(waveform, sr, 24000)
-
-                sample = {
-                    "waveform": waveform,
-                    "name": f"sample_{len(samples):04d}",
-                }
+                sample = {"waveform": waveform, "name": f"sample_{len(samples):04d}"}
                 if text_col:
                     sample["text"] = table.column(text_col)[row_idx].as_py()
-
                 samples.append(sample)
             except Exception as e:
                 print(f"  Skipping row {row_idx}: {e}")
                 continue
+    return samples
+
+
+def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duration):
+    """Fallback: use HuggingFace datasets library (handles file-reference audio)."""
+    from datasets import load_dataset
+
+    print(f"[load_from_datasets] Streaming {dataset_name} via datasets library ...")
+    splits = ["test", "train", "validation"]
+    ds = None
+    for split in splits:
+        try:
+            ds = load_dataset(dataset_name, split=split, streaming=True, trust_remote_code=True)
+            print(f"[load_from_datasets] Using split: {split}")
+            break
+        except Exception:
+            continue
+    if ds is None:
+        print(f"[load_from_datasets] Could not load any split from {dataset_name}")
+        return []
+
+    text_col = None
+    samples = []
+    for row in ds:
+        if len(samples) >= num_samples:
+            break
+        try:
+            audio = row.get("audio")
+            if audio is None:
+                continue
+            arr = audio["array"]
+            sr = audio["sampling_rate"]
+            waveform = torch.from_numpy(arr).float()
+            if waveform.dim() == 1:
+                waveform = waveform.unsqueeze(0)
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+            duration = waveform.shape[-1] / sr
+            if duration < min_duration or duration > max_duration:
+                continue
+            if sr != 24000:
+                waveform = torchaudio.functional.resample(waveform, sr, 24000)
+
+            if text_col is None:
+                text_col = next(
+                    (c for c in ["text", "transcript", "utterance", "normalized", "verbatim"]
+                     if c in row and row[c]),
+                    None,
+                )
+
+            sample = {"waveform": waveform, "name": f"sample_{len(samples):04d}"}
+            if text_col and row.get(text_col):
+                sample["text"] = row[text_col]
+            samples.append(sample)
+        except Exception as e:
+            print(f"  Skipping: {e}")
+            continue
+    return samples
+
+
+def load_samples_from_hf(dataset_name, num_samples, min_duration=1.0, max_duration=30.0):
+    """Pull audio samples from a HuggingFace dataset, including transcripts.
+
+    Tries fast parquet path first (embedded audio bytes), then falls back to
+    the datasets library (for datasets with file-reference audio like Lahaja).
+    """
+    samples = _load_from_parquet(dataset_name, num_samples, min_duration, max_duration)
+    if samples is None:
+        print(f"[load_samples_from_hf] No embedded audio in parquets, falling back to datasets library")
+        samples = _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duration)
 
     print(f"[load_samples_from_hf] Loaded {len(samples)} samples"
           f" ({'with' if samples and 'text' in samples[0] else 'without'} transcripts)")
