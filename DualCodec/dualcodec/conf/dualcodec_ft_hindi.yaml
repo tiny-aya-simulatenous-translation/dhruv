@@ -30,7 +30,7 @@ trainer:
       max_steps: 40000
       save_checkpoint_stride:
         - 5000
-      keep_last: [3]
+      keep_last: [4]
       disable_mixed_precision: true
       optimizer:
         lr: 2e-4

@@ -30,13 +30,17 @@ trainer:
       max_steps: 35000
       save_checkpoint_stride:
         - 5000
-      keep_last: [3]
+      keep_last: [4]
       disable_mixed_precision: true
       optimizer:
-        lr: 2e-4
+        lr: 1e-4
       adamw:
-        lr: 2e-4
+        lr: 1e-4
       scheduler:
         warmup_steps: 1000
         total_steps: 35000
-        min_lr: 5e-5
+        min_lr: 2e-5
+
+data:
+  dataset:
+    max_hours: 100

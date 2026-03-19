@@ -36,6 +36,7 @@ class HuggingFaceAudioDataset(IterableDataset):
         streaming: bool = True,
         min_duration: float = 1.0,
         max_duration: float = 45.0,
+        max_hours: float = -1,
     ):
         self.dataset_name = dataset_name
         self.split = split
@@ -43,11 +44,13 @@ class HuggingFaceAudioDataset(IterableDataset):
         self.streaming = streaming
         self.min_duration = min_duration
         self.max_duration = max_duration
+        self.max_hours = max_hours
 
         from huggingface_hub import hf_hub_download
         import pyarrow.parquet as pq
 
-        print(f"[HuggingFaceAudioDataset] dataset={dataset_name}, split={split}")
+        hours_str = f", max_hours={max_hours}" if max_hours > 0 else ""
+        print(f"[HuggingFaceAudioDataset] dataset={dataset_name}, split={split}{hours_str}")
 
     def _decode_audio(self, audio_entry):
         """Decode audio bytes from the HF audio struct into a waveform tensor."""
@@ -95,13 +98,19 @@ class HuggingFaceAudioDataset(IterableDataset):
         shard_indices = list(range(len(parquet_files)))
         random.shuffle(shard_indices)
 
+        max_seconds = self.max_hours * 3600 if self.max_hours > 0 else float("inf")
         print(
             f"[HuggingFaceAudioDataset] Found {len(parquet_files)} parquet shards"
         )
 
         from huggingface_hub import hf_hub_download
 
+        total_yielded_seconds = 0.0
+
         for shard_idx in shard_indices:
+            if total_yielded_seconds >= max_seconds:
+                break
+
             fname = parquet_files[shard_idx]
             local_path = hf_hub_download(
                 repo_id=self.dataset_name,
@@ -116,6 +125,9 @@ class HuggingFaceAudioDataset(IterableDataset):
             has_duration_col = "duration" in table.column_names
 
             for row_idx in row_indices:
+                if total_yielded_seconds >= max_seconds:
+                    break
+
                 try:
                     if has_duration_col:
                         dur = table.column("duration")[row_idx].as_py()
@@ -130,6 +142,7 @@ class HuggingFaceAudioDataset(IterableDataset):
                         if duration < self.min_duration or duration > self.max_duration:
                             continue
 
+                    total_yielded_seconds += duration
                     yield {
                         "wav": audio_entry.get("path", ""),
                         "speech": waveform,
@@ -139,6 +152,9 @@ class HuggingFaceAudioDataset(IterableDataset):
                 except Exception as e:
                     print(f"[HuggingFaceAudioDataset] Skipping row {row_idx}: {e}")
                     continue
+
+        if self.max_hours > 0:
+            print(f"[HuggingFaceAudioDataset] Yielded {total_yielded_seconds/3600:.1f}h of audio")
 
     def __len__(self):
         return 0  # unknown for streaming

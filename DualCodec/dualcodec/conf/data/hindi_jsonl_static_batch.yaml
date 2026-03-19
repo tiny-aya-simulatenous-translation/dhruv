@@ -54,7 +54,7 @@ w2v_feature:
   feature_extractor: ${..w2v_feat_extractor}
 
 dataset:
-  _target_: dualcodec.dataset.hindi_dataset.ManifestAudioDataset
+  _target_: dualcodec.dataset.train_dataset.ManifestAudioDataset
   manifest_path: ${machine.manifest_path}
   data_root: ${machine.data_root}
   min_duration: 1.0
