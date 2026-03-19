@@ -140,7 +140,7 @@ def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duratio
     ds = None
     for split in splits:
         try:
-            ds = load_dataset(dataset_name, split=split, streaming=True, trust_remote_code=True)
+            ds = load_dataset(dataset_name, split=split, streaming=True)
             print(f"[load_from_datasets] Using split: {split}")
             break
         except Exception:
@@ -150,16 +150,36 @@ def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duratio
         return []
 
     text_col = None
+    audio_col = None
     samples = []
     for row in ds:
         if len(samples) >= num_samples:
             break
         try:
-            audio = row.get("audio")
+            # Find the audio column on first iteration
+            if audio_col is None:
+                for candidate in ["audio", "audio_filepath", "path", "file"]:
+                    if candidate in row and row[candidate] is not None:
+                        audio_col = candidate
+                        break
+                if audio_col is None:
+                    print(f"[load_from_datasets] Could not find audio column. Keys: {list(row.keys())}")
+                    return []
+                print(f"[load_from_datasets] Using audio column: {audio_col}")
+
+            audio = row.get(audio_col)
             if audio is None:
                 continue
-            arr = audio["array"]
-            sr = audio["sampling_rate"]
+
+            # HF Audio feature returns {"array": np.array, "sampling_rate": int}
+            if isinstance(audio, dict) and "array" in audio:
+                arr = audio["array"]
+                sr = audio["sampling_rate"]
+            else:
+                # audio_filepath or path column — it's a string path, skip
+                # (datasets library should have resolved it if it's an Audio feature)
+                print(f"  Skipping: audio column is not decoded (got {type(audio)})")
+                continue
             waveform = torch.from_numpy(arr).float()
             if waveform.dim() == 1:
                 waveform = waveform.unsqueeze(0)
