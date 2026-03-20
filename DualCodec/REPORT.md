@@ -262,7 +262,99 @@ The finetuned model shows the most significant gain in SSNR (~12% relative impro
 
 ---
 
-## 6. Quick Reference: Full Pipeline Commands
+## 6. VERSA Evaluation
+
+[VERSA](https://github.com/shimhz/versa) (Versatile Evaluation of Speech and Audio) provides a comprehensive suite of 90+ metrics for evaluating codec reconstruction quality — significantly more thorough than the custom benchmark above.
+
+### 6.1 Setup
+
+```bash
+cd /home/ubuntu/dhruv/versa
+pip install -e .
+```
+
+### 6.2 Prepare Transcripts
+
+VERSA expects Kaldi-style text format (`utterance_id transcript`). Convert from the JSONL produced by `reconstruct.py`:
+
+```bash
+python3 -c "
+import json
+with open('../Benchmarking/data/hindi/transcripts.jsonl') as f:
+    for line in f:
+        d = json.loads(line)
+        uid = d['file'].replace('.wav','')
+        print(f\"{uid} {d['text']}\")
+" > ../Benchmarking/data/hindi/transcripts.txt
+```
+
+### 6.3 Run Evaluation
+
+```bash
+cd /home/ubuntu/dhruv/versa
+
+# Finetuned model
+python versa/bin/scorer.py \
+    --score_config egs/demo/codec.yaml \
+    --gt ../Benchmarking/data/hindi/originals \
+    --pred ../Benchmarking/data/hindi/codecs/dualcodec \
+    --text ../Benchmarking/data/hindi/transcripts.txt \
+    --output_file ../Benchmarking/data/hindi/versa_results_finetuned.txt \
+    --io dir \
+    --use_gpu true
+
+# Base pretrained model (if --also_base was used during reconstruction)
+python versa/bin/scorer.py \
+    --score_config egs/demo/codec.yaml \
+    --gt ../Benchmarking/data/hindi/originals \
+    --pred ../Benchmarking/data/hindi/codecs/dualcodec_base \
+    --text ../Benchmarking/data/hindi/transcripts.txt \
+    --output_file ../Benchmarking/data/hindi/versa_results_base.txt \
+    --io dir \
+    --use_gpu true
+```
+
+### 6.4 VERSA Codec Metrics
+
+The `egs/demo/codec.yaml` config evaluates:
+
+| Category | Metrics | Description |
+|---|---|---|
+| **Spectral** | MCD, F0 correlation, F0 RMSE | Mel cepstral distortion and pitch accuracy |
+| **Signal** | SDR, SIR, SAR, SI-SNR, CI-SDR | Signal-to-distortion/noise/artifact ratios |
+| **Perceptual** | PESQ, STOI | Standardized speech quality and intelligibility |
+| **Neural quality** | WARP-Q, NOMAD, UTMOS, Sheet SSQA, Audiobox Aesthetics | Neural network-based quality predictors |
+| **Speaker** | Speaker cosine similarity | Voice identity preservation |
+| **Intelligibility** | Whisper WER, ASR match | Content preservation via ASR |
+| **Discrete speech** | Speech BERT, Speech BLEU, Token distance | Semantic content similarity |
+| **Deepfake** | ASVSpoof score | Naturalness vs. synthetic artifact detection |
+| **Enhancement** | SE-SNR | SNR from a pretrained speech enhancement model |
+
+### 6.5 Summarize Results
+
+```bash
+python scripts/show_result.py ../Benchmarking/data/hindi/versa_results_finetuned.txt
+python scripts/show_result.py ../Benchmarking/data/hindi/versa_results_base.txt
+```
+
+### 6.6 For Turkish
+
+```bash
+cd /home/ubuntu/dhruv/versa
+
+python versa/bin/scorer.py \
+    --score_config egs/demo/codec.yaml \
+    --gt ../Benchmarking/data/turkish/originals \
+    --pred ../Benchmarking/data/turkish/codecs/dualcodec \
+    --text ../Benchmarking/data/turkish/transcripts.txt \
+    --output_file ../Benchmarking/data/turkish/versa_results_finetuned.txt \
+    --io dir \
+    --use_gpu true
+```
+
+---
+
+## 8. Quick Reference: Full Pipeline Commands
 
 ```bash
 # === SETUP ===
@@ -282,14 +374,40 @@ python3 scripts/reconstruct.py \
     --benchmark --also_base \
     --output_dir /home/ubuntu/dhruv/Benchmarking/data/hindi
 
-# === BENCHMARK ===
+# === CUSTOM BENCHMARK ===
 cd /home/ubuntu/dhruv/Benchmarking
 python benchmark.py --config config.yaml --codecs dualcodec dualcodec_base
+
+# === VERSA EVALUATION (comprehensive) ===
+cd /home/ubuntu/dhruv/versa
+pip install -e .
+
+# Convert transcripts to Kaldi format
+python3 -c "
+import json
+with open('../Benchmarking/data/hindi/transcripts.jsonl') as f:
+    for line in f:
+        d = json.loads(line)
+        uid = d['file'].replace('.wav','')
+        print(f\"{uid} {d['text']}\")
+" > ../Benchmarking/data/hindi/transcripts.txt
+
+# Run VERSA on finetuned model
+python versa/bin/scorer.py \
+    --score_config egs/demo/codec.yaml \
+    --gt ../Benchmarking/data/hindi/originals \
+    --pred ../Benchmarking/data/hindi/codecs/dualcodec \
+    --text ../Benchmarking/data/hindi/transcripts.txt \
+    --output_file ../Benchmarking/data/hindi/versa_results_finetuned.txt \
+    --io dir --use_gpu true
+
+# Summarize
+python scripts/show_result.py ../Benchmarking/data/hindi/versa_results_finetuned.txt
 ```
 
 ---
 
-## 7. Repository Structure
+## 9. Repository Structure
 
 ```
 Tiny_Aya_Speech/
@@ -307,8 +425,16 @@ Tiny_Aya_Speech/
 │   ├── w2v-bert-2.0/                      # Semantic model (auto-downloaded)
 │   └── output_checkpoints/                # Training outputs
 │
+├── versa/                                 # VERSA evaluation toolkit
+│   ├── versa/bin/scorer.py                # Main evaluation entry point
+│   ├── egs/demo/codec.yaml                # Codec-specific metric config
+│   ├── scripts/
+│   │   ├── preprocess/dir2scp.py          # Directory → SCP conversion
+│   │   └── show_result.py                 # Result summary
+│   └── setup.py
+│
 └── Benchmarking/
-    ├── benchmark.py                       # Main benchmarking script
+    ├── benchmark.py                       # Custom benchmarking script
     ├── config.yaml                        # Benchmark configuration
     ├── metrics/
     │   ├── dnsmos.py                      # DNSMOS P.835 scorer
@@ -322,5 +448,8 @@ Tiny_Aya_Speech/
         └── hindi/
             ├── originals/                 # Test audio
             ├── codecs/{dualcodec,dualcodec_base}/
-            └── transcripts.jsonl
+            ├── transcripts.jsonl          # JSONL format (from reconstruct.py)
+            ├── transcripts.txt            # Kaldi format (for VERSA)
+            ├── versa_results_finetuned.txt
+            └── versa_results_base.txt
 ```

@@ -1,0 +1,3 @@
+[submodule "versa"]
+	path = versa
+	url = https://github.com/wavlab-speech/versa.git

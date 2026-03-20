@@ -6,5 +6,6 @@ w2v-bert-2.0
 .DS_Store
 __pycache__
 *.wav
-output_checkpointshindi_codec_ckpt/
+output_checkpoints
+hindi_codec_ckpt/
 turkish_codec_ckpt/
