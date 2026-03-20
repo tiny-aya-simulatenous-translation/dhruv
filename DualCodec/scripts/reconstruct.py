@@ -99,7 +99,7 @@ def _load_from_parquet(dataset_name, num_samples, min_duration, max_duration):
         local_path = hf_hub_download(repo_id=dataset_name, filename=fname, repo_type="dataset")
         table = pq.read_table(local_path)
         text_col = next(
-            (c for c in ["text", "transcript", "utterance"] if c in table.column_names),
+            (c for c in ["text", "transcript", "transcription", "utterance"] if c in table.column_names),
             None,
         )
         for row_idx in range(table.num_rows):
