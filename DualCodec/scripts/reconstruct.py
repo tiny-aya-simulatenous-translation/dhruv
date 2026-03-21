@@ -36,6 +36,7 @@ import torchaudio
 import torch.nn.functional as F
 import numpy as np
 import soundfile as sf
+from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -82,58 +83,103 @@ def _load_from_parquet(dataset_name, num_samples, min_duration, max_duration):
     if not parquet_files:
         return None
 
-    # Check if the first shard has an "audio" column with embedded bytes
+    # Check if any audio column has embedded bytes
     first_local = hf_hub_download(repo_id=dataset_name, filename=parquet_files[0], repo_type="dataset")
     first_table = pq.read_table(first_local)
-    if "audio" not in first_table.column_names:
+    audio_col_name = next(
+        (c for c in ["audio", "audio_filepath", "audio_path"]
+         if c in first_table.column_names),
+        None,
+    )
+    if audio_col_name is None:
         return None
-    first_audio = first_table.column("audio")[0].as_py()
+    first_audio = first_table.column(audio_col_name)[0].as_py()
     if not isinstance(first_audio, dict) or "bytes" not in first_audio or first_audio["bytes"] is None:
         return None
 
-    print(f"[load_from_parquet] Found {len(parquet_files)} shards with embedded audio")
-    samples = []
+    print(f"[load_from_parquet] Found {len(parquet_files)} shards with embedded audio (column: {audio_col_name})")
+
+    # Collect all candidate rows across shards (metadata only, no decoding yet)
+    all_rows = []
     for fname in parquet_files:
-        if len(samples) >= num_samples:
-            break
         local_path = hf_hub_download(repo_id=dataset_name, filename=fname, repo_type="dataset")
         table = pq.read_table(local_path)
         text_col = next(
-            (c for c in ["text", "transcript", "transcription", "utterance"] if c in table.column_names),
+            (c for c in ["text", "transcript", "transcription", "utterance", "normalized", "verbatim"]
+             if c in table.column_names),
             None,
         )
+        has_duration = "duration" in table.column_names
         for row_idx in range(table.num_rows):
-            if len(samples) >= num_samples:
-                break
-            try:
-                audio_entry = table.column("audio")[row_idx].as_py()
-                audio_bytes = audio_entry["bytes"]
-                data, sr = sf.read(io.BytesIO(audio_bytes))
-                waveform = torch.from_numpy(data).float()
-                if waveform.dim() == 1:
-                    waveform = waveform.unsqueeze(0)
-                else:
-                    waveform = waveform.T
-                if waveform.shape[0] > 1:
-                    waveform = waveform.mean(dim=0, keepdim=True)
-                duration = waveform.shape[-1] / sr
-                if duration < min_duration or duration > max_duration:
+            if has_duration:
+                dur = table.column("duration")[row_idx].as_py()
+                if dur < min_duration or dur > max_duration:
                     continue
-                if sr != 24000:
-                    waveform = torchaudio.functional.resample(waveform, sr, 24000)
-                sample = {"waveform": waveform, "name": f"sample_{len(samples):04d}"}
-                if text_col:
-                    sample["text"] = table.column(text_col)[row_idx].as_py()
-                samples.append(sample)
-            except Exception as e:
-                print(f"  Skipping row {row_idx}: {e}")
+            audio_entry = table.column(audio_col_name)[row_idx].as_py()
+            if not isinstance(audio_entry, dict) or not audio_entry.get("bytes"):
                 continue
+            row_data = {"audio_bytes": audio_entry["bytes"]}
+            if text_col:
+                row_data["text"] = table.column(text_col)[row_idx].as_py()
+            all_rows.append(row_data)
+            if len(all_rows) >= num_samples:
+                break
+        if len(all_rows) >= num_samples:
+            break
+    print(f"[load_from_parquet] Collected {len(all_rows)} rows, decoding audio in parallel ...")
+
+    # Parallel decode with thread pool
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _decode_one(idx_and_row):
+        idx, row = idx_and_row
+        try:
+            data, sr = sf.read(io.BytesIO(row["audio_bytes"]))
+            waveform = torch.from_numpy(data).float()
+            if waveform.dim() == 1:
+                waveform = waveform.unsqueeze(0)
+            else:
+                waveform = waveform.T
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+            duration = waveform.shape[-1] / sr
+            if duration < min_duration or duration > max_duration:
+                return None
+            if sr != 24000:
+                waveform = torchaudio.functional.resample(waveform, sr, 24000)
+            sample = {"waveform": waveform, "name": f"sample_{idx:04d}"}
+            if "text" in row:
+                sample["text"] = row["text"]
+            return sample
+        except Exception:
+            return None
+
+    samples = []
+    done = 0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_decode_one, (i, r)): i for i, r in enumerate(all_rows)}
+        for future in as_completed(futures):
+            result = future.result()
+            done += 1
+            if result is not None:
+                samples.append(result)
+            if done % 200 == 0:
+                print(f"  [load_from_parquet] decoded {done}/{len(all_rows)} ...")
+
+    # Sort by name to maintain order
+    samples.sort(key=lambda s: s["name"])
+    # Re-number
+    for i, s in enumerate(samples):
+        s["name"] = f"sample_{i:04d}"
+    print(f"[load_from_parquet] Done: {len(samples)} samples ready")
     return samples
 
 
 def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duration):
     """Fallback: use HuggingFace datasets library (handles file-reference audio)."""
-    from datasets import load_dataset
+    import os
+    os.environ.setdefault("HF_AUDIO_DECODER", "soundfile")
+    from datasets import load_dataset, Audio
 
     print(f"[load_from_datasets] Streaming {dataset_name} via datasets library ...")
     splits = ["test", "train", "validation"]
@@ -143,16 +189,27 @@ def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duratio
             ds = load_dataset(dataset_name, split=split, streaming=True)
             print(f"[load_from_datasets] Using split: {split}")
             break
-        except Exception:
+        except Exception as e:
+            print(f"[load_from_datasets] Failed to load split '{split}': {e}")
             continue
     if ds is None:
         print(f"[load_from_datasets] Could not load any split from {dataset_name}")
         return []
 
+    # Disable audio decoding to avoid torchcodec/FFmpeg dependency;
+    # we decode manually with soundfile below.
+    try:
+        audio_cols = [c for c in ds.column_names if "audio" in c.lower()]
+        if audio_cols:
+            ds = ds.cast_column(audio_cols[0], Audio(decode=False))
+            print(f"[load_from_datasets] Disabled auto-decode for '{audio_cols[0]}', will decode with soundfile")
+    except Exception as e:
+        print(f"[load_from_datasets] Could not cast audio column: {e}")
+
     text_col = None
     audio_col = None
     samples = []
-    for row in ds:
+    for row in tqdm(ds):
         if len(samples) >= num_samples:
             break
         try:
@@ -171,19 +228,26 @@ def _load_from_datasets_lib(dataset_name, num_samples, min_duration, max_duratio
             if audio is None:
                 continue
 
-            # Decode audio into (waveform, sample_rate) regardless of format
+            # Decode audio manually with soundfile
+            import io as _io
             if isinstance(audio, dict) and "array" in audio:
-                # datasets < 4.x: already decoded to {"array": np.ndarray, "sampling_rate": int}
                 waveform = torch.from_numpy(audio["array"]).float()
                 sr = audio["sampling_rate"]
+            elif isinstance(audio, dict) and "bytes" in audio and audio["bytes"] is not None:
+                data, sr = sf.read(_io.BytesIO(audio["bytes"]))
+                waveform = torch.from_numpy(data).float()
+            elif isinstance(audio, dict) and "path" in audio and audio.get("bytes") is None:
+                # File-reference audio: download and read
+                from huggingface_hub import hf_hub_download
+                local = hf_hub_download(
+                    repo_id=dataset_name, filename=audio["path"], repo_type="dataset"
+                )
+                data, sr = sf.read(local)
+                waveform = torch.from_numpy(data).float()
             elif hasattr(audio, "get_all_samples"):
-                # datasets >= 4.x: lazy AudioDecoder → torchcodec AudioSamples
                 decoded = audio.get_all_samples()
                 waveform = decoded.data.float()
                 sr = decoded.sample_rate
-            elif hasattr(audio, "numpy"):
-                waveform = torch.from_numpy(audio.numpy()).float()
-                sr = getattr(audio, "sampling_rate", 16000)
             else:
                 print(f"  Skipping: unsupported audio type (got {type(audio)})")
                 continue
@@ -276,6 +340,32 @@ def reconstruct(inference_engine, waveform, device, num_quantizers=8):
     original = audio[..., :min_len].cpu()
     recon = recon[..., :min_len].cpu()
     return original.squeeze(0), recon.squeeze(0)
+
+
+@torch.no_grad()
+def reconstruct_batch(inference_engine, waveforms, device, num_quantizers=8):
+    """Encode → decode a batch of waveforms. Returns list of (original, recon) pairs.
+
+    Pads to the longest waveform in the batch, then trims back after decoding.
+    """
+    lengths = [w.shape[-1] for w in waveforms]
+    max_len = max(lengths)
+
+    # Pad all waveforms to max_len and stack → (B, 1, max_len)
+    padded = torch.stack([
+        F.pad(w, (0, max_len - w.shape[-1])) for w in waveforms
+    ]).to(device)
+
+    semantic_codes, acoustic_codes = inference_engine.encode(padded, n_quantizers=num_quantizers)
+    recon_batch = inference_engine.decode(semantic_codes, acoustic_codes)
+
+    results = []
+    for i, orig_len in enumerate(lengths):
+        min_len = min(orig_len, recon_batch.shape[-1])
+        orig = padded[i:i+1, :, :min_len].cpu()
+        recon = recon_batch[i:i+1, :, :min_len].cpu()
+        results.append((orig.squeeze(0), recon.squeeze(0)))
+    return results
 
 
 def main():
@@ -378,27 +468,41 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
         metrics = []
-        print(f"\nReconstructing {len(samples)} samples [{codec_name}] (quantizers={args.num_quantizers}) ...\n")
+        batch_size = 8
+        print(f"\nReconstructing {len(samples)} samples [{codec_name}] (quantizers={args.num_quantizers}, batch={batch_size}) ...\n")
 
-        for sample in samples:
-            name = sample["name"]
-            waveform = sample["waveform"]
+        for batch_start in range(0, len(samples), batch_size):
+            batch_samples = samples[batch_start:batch_start + batch_size]
+            waveforms = [s["waveform"] for s in batch_samples]
 
-            original, recon = reconstruct(eng, waveform, device, args.num_quantizers)
-            snr = compute_snr(original, recon)
+            try:
+                results = reconstruct_batch(eng, waveforms, device, args.num_quantizers)
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    torch.cuda.empty_cache()
+                    print(f"  OOM at batch {batch_start}, falling back to single-sample ...")
+                    results = [reconstruct(eng, w, device, args.num_quantizers) for w in waveforms]
+                else:
+                    raise
 
-            wav_name = f"{name}.wav"
-            if args.benchmark:
-                if save_originals:
-                    sf.write(os.path.join(orig_dir, wav_name), original.numpy().T, 24000)
-                sf.write(os.path.join(recon_dir, wav_name), recon.numpy().T, 24000)
-            else:
-                sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_original.wav"), original.numpy().T, 24000)
-                sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_recon.wav"), recon.numpy().T, 24000)
+            for sample, (original, recon) in zip(batch_samples, results):
+                name = sample["name"]
+                snr = compute_snr(original, recon)
 
-            duration = original.shape[-1] / 24000
-            metrics.append({"name": name, "snr_db": round(snr, 2), "duration_s": round(duration, 2)})
-            print(f"  {name}: SNR = {snr:.2f} dB  ({duration:.1f}s)")
+                wav_name = f"{name}.wav"
+                if args.benchmark:
+                    if save_originals:
+                        sf.write(os.path.join(orig_dir, wav_name), original.numpy().T, 24000)
+                    sf.write(os.path.join(recon_dir, wav_name), recon.numpy().T, 24000)
+                else:
+                    sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_original.wav"), original.numpy().T, 24000)
+                    sf.write(os.path.join(args.output_dir, f"{name}_{codec_name}_recon.wav"), recon.numpy().T, 24000)
+
+                duration = original.shape[-1] / 24000
+                metrics.append({"name": name, "snr_db": round(snr, 2), "duration_s": round(duration, 2)})
+
+            if (batch_start + batch_size) % 200 < batch_size or batch_start + batch_size >= len(samples):
+                print(f"  [{codec_name}] {min(batch_start + batch_size, len(samples))}/{len(samples)} done ...")
 
         avg_snr = np.mean([m["snr_db"] for m in metrics])
         print(f"\n[{codec_name}] Average SNR: {avg_snr:.2f} dB")
