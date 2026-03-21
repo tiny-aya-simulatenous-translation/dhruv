@@ -12,6 +12,7 @@ transformers>=4.30.0
 huggingface_hub[cli]
 safetensors
 datasets
+torchcodec
 
 # Training framework
 accelerate>=1.0
