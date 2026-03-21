@@ -11,7 +11,7 @@ loguru
 transformers>=4.30.0
 huggingface_hub[cli]
 safetensors
-datasets
+datasets<3.0
 torchcodec
 
 # Training framework
